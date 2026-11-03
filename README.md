@@ -75,6 +75,11 @@ Labels (`scripts/labels.py`, `uv run python scripts/labels.py` refreshes them in
 sh scripts/build_data.sh      # ~11 GB of GUGiK downloads on first run (cached in data/raw), then ~6 min, ~26 GB RAM peak
 ```
 
+It rebuilds everything the viewer loads that depends on OSM, the LiDAR or the tiles (tiles, meta, terrain, places,
+flood, windows, phenology and foliage, zones). Zones need `data/cost1m.json`, the triangles of each 1 m tile, which
+only a browser can measure: with `pnpm dev` running, `node web/tools/cost1m.mjs data/cost1m.json`. Without it the
+build stops before zones and says so. Failed downloads stop the build too instead of being cached.
+
 OSM comes from the daily Geofabrik extract for Mazowieckie, cut to the AOI by `scripts/osm_pbf.py` into the same JSON
 as Overpass `out geom(bbox)` (the 4 × 3 km query is too heavy for the public Overpass servers; `OVERPASS=1` uses them).
 GUGiK sheet ids come from the orthophoto index WFS (`PZGIK/ORTO/WFS/Skorowidze`).

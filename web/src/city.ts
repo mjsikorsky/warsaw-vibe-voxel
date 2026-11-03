@@ -99,7 +99,8 @@ export async function installCity({ streamer: S, uniforms: U, meta, scene, focus
       counted.add(n.key);
       if (n.foliage) { folIn++; if (n.mesh) { n.mesh.material = folMat; n.mesh.visible = true; } continue; }
       const i = index(n.tx, n.ty);
-      inTile[i] = 1; tilesIn++;
+      tilesIn++;
+      if (!n.failed) inTile[i] = 1; // a tile that never loaded keeps its terrain piece, so there is no hole
       if (n.mesh) { n.mesh.customDepthMaterial = depthMat; n.mesh.visible = true; }
       for (const b of onTile[i]) if (!complete[b] && tilesOf[b].every((k) => inTile[k])) {
         complete[b] = 1;
@@ -167,6 +168,7 @@ async function loadTerrain(meta: Meta, scene: THREE.Scene, nx: number, ny: numbe
     dropUnder(inTile: Uint8Array) {
       pieces.forEach((m, i) => { if (m && inTile[i]) { scene.remove(m); m.geometry.dispose(); pieces[i] = null; } });
     },
-    dispose() { if (tex.image.data) { tex.dispose(); tex.image.data = null as unknown as Uint8Array; } },
+    // pieces left (tiles that failed to load) still sample the texture
+    dispose() { if (tex.image.data && !pieces.some(Boolean)) { tex.dispose(); tex.image.data = null as unknown as Uint8Array; } },
   };
 }

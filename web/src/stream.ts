@@ -16,6 +16,7 @@ export interface TileNode {
   mesh?: THREE.Mesh;
   data?: ColumnData;
   empty?: boolean;
+  failed?: boolean; // gave up after retries (network or server errors), as opposed to a tile that is not there
   dataJob?: Job;
   ready: Promise<void>;
   job: Job;
@@ -26,9 +27,15 @@ interface Job {
   dataOnly: boolean;
   state: 'queued' | 'loading';
   prio: number;
+  tries: number;
   done: Promise<void>;
   resolve: () => void;
 }
+
+const MAX_TRIES = 5; // retries after 1, 2, 4, 8 s
+
+// 0: fetch or body read failed (offline, connection cut); worth another try, as are timeouts and server errors
+const transient = (status: number | null) => status === 0 || status === 408 || status === 429 || (status ?? 0) >= 500;
 
 interface Pooled { worker: Worker; busy: number; idle: number }
 
@@ -37,7 +44,7 @@ const releaseArray = function (this: THREE.BufferAttribute) { (this as { array: 
 function makeJob(node: TileNode, dataOnly: boolean, prio: number): Job {
   let resolve = () => {};
   const done = new Promise<void>((r) => { resolve = r; });
-  return { node, dataOnly, state: 'queued', prio, done, resolve };
+  return { node, dataOnly, state: 'queued', prio, tries: 0, done, resolve };
 }
 
 // Loads voxel tiles (scripts/tiles.py: N x N cells of s metres) and meshes them in a pool of workers. What to load and
@@ -80,11 +87,25 @@ export class TileStreamer implements ColumnSource {
   request(s: number, tx: number, ty: number, prio: number, keep = false): Promise<void> {
     const key = this.key(s, tx, ty);
     let n = this.nodes.get(key);
+    if (n && prio >= 1e8) n.pinned = performance.now() + 15000;
     if (n && keep && n.state === 'ready' && !n.data && !n.empty) {
       n.keep = true;
       if (!n.dataJob) { n.dataJob = makeJob(n, true, prio); this.queue.push(n.dataJob); }
       n.dataJob.prio = prio;
       return n.dataJob.done;
+    }
+    if (n && keep && !n.keep && n.state !== 'ready') {
+      // still queued: it is fetched with its column data. Already on its way without: once it lands, fetch the data too
+      n.keep = true;
+      if (n.job.state === 'loading') {
+        const node = n;
+        return n.ready.then(() => {
+          if (this.nodes.get(key) !== node) return;
+          const p = this.request(s, tx, ty, prio, true);
+          this.pump();
+          return p;
+        });
+      }
     }
     n ??= this.addNode(key, s, tx, ty, false, keep);
     n.job.prio = prio;
@@ -113,10 +134,14 @@ export class TileStreamer implements ColumnSource {
     for (const j of this.queue) if (!j.dataOnly) j.prio = prio(j.node);
   }
 
+  // drops jobs not yet sent to a worker; whoever waits on them (ensure, setWalk) is let go, with the tile not loaded
   dropQueued(keep: (n: TileNode) => boolean) {
+    const now = performance.now();
     this.queue = this.queue.filter((j) => {
-      if (j.state !== 'queued' || keep(j.node)) return true;
-      if (j.dataOnly) { j.node.dataJob = undefined; j.resolve(); } else this.nodes.delete(j.node.key);
+      if (j.state !== 'queued' || j.node.pinned > now || keep(j.node)) return true;
+      if (j.dataOnly) j.node.dataJob = undefined;
+      else this.nodes.delete(j.node.key);
+      j.resolve();
       return false;
     });
   }
@@ -180,13 +205,15 @@ export class TileStreamer implements ColumnSource {
     const n = this.nodes.get(m.key);
     if (n && m.dataOnly) {
       const job = n.dataJob;
+      if (m.type === 'error' && job && this.retry(job, m.status)) { this.pump(); return; }
       n.dataJob = undefined;
       if (m.type === 'error') console.warn(m.error);
       else if (m.data && !n.data) this.setData(n, m.data);
       job?.resolve();
     } else if (n && m.type === 'error') {
+      if (this.retry(n.job, m.status)) { this.pump(); return; }
       console.warn(m.error);
-      n.state = 'ready'; n.empty = true;
+      n.state = 'ready'; n.empty = true; n.failed = transient(m.status);
       n.job.resolve();
     } else if (n && m.type === 'node') {
       if (m.quads) n.mesh = this.makeMesh(m.pos, m.attr, m.pal, m.bld, m.quads);
@@ -195,6 +222,20 @@ export class TileStreamer implements ColumnSource {
       n.job.resolve();
     }
     this.pump();
+  }
+
+  // a network blip or a server error: send the job again after a while (1, 2, 4, 8 s), unless the tile is gone by then
+  private retry(job: Job, status: number | null) {
+    if (!transient(status) || job.tries >= MAX_TRIES - 1) return false;
+    const delay = 1000 * 2 ** job.tries++;
+    setTimeout(() => {
+      const n = job.node;
+      if (this.nodes.get(n.key) !== n || (job.dataOnly ? n.dataJob !== job : n.state === 'ready')) return;
+      job.state = 'queued';
+      this.queue.push(job);
+      this.pump();
+    }, delay);
+    return true;
   }
 
   private makeMesh(pos: Int16Array, attr: Uint8Array, pal: Uint16Array, bld: Uint16Array | null, quads: number) {

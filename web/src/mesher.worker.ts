@@ -20,15 +20,22 @@ export interface MeshRequest {
 
 export type MeshReply =
   | { type: 'node'; key: string; dataOnly: boolean; data: Columns | null; pos: Int16Array; attr: Uint8Array; pal: Uint16Array; bld: Uint16Array | null; quads: number }
-  | { type: 'error'; key: string; dataOnly: boolean; error: string };
+  | { type: 'error'; key: string; dataOnly: boolean; error: string; status: number | null }; // status: HTTP, 0 for a network error, null otherwise
 
 const post = (msg: MeshReply, transfer: Transferable[] = []) =>
   (self as unknown as { postMessage(m: MeshReply, t: Transferable[]): void }).postMessage(msg, transfer);
 
+class FetchError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 async function fetchGzip(url: string) {
-  const res = await fetch(url);
-  if (!res.ok || !res.body) throw new Error(`${res.status} ${url}`);
-  return new Response(res.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  let res: Response;
+  try { res = await fetch(url); } catch (err) { throw new FetchError(`${err} ${url}`, 0); }
+  if (!res.ok || !res.body) throw new FetchError(`${res.status} ${url}`, res.status);
+  try {
+    return await new Response(res.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  } catch (err) { throw new FetchError(`${err} ${url}`, 0); } // cut off mid-body
 }
 
 function decode(buf: ArrayBuffer, N: number) {
@@ -60,7 +67,7 @@ self.onmessage = async (e: MessageEvent<MeshRequest>) => {
     if (keep) transfer.push(...columnBuffers(keep));
     post({ type: 'node', key: m.key, dataOnly: false, data: keep, ...out }, transfer);
   } catch (err) {
-    post({ type: 'error', key: m.key, dataOnly: m.dataOnly, error: String(err) });
+    post({ type: 'error', key: m.key, dataOnly: m.dataOnly, error: String(err), status: err instanceof FetchError ? err.status : null });
   }
 };
 

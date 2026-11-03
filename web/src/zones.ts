@@ -109,8 +109,8 @@ export async function installZones({ streamer: S, uniforms: U, meta, focus, qs, 
   const bdist = (b: number[], f: THREE.Vector3) => Math.hypot(Math.max(b[3] - f.x, 0, f.x - b[5]), Math.max(b[4] - f.z, 0, f.z - b[6])); // [cx, cy, n, x0, y0, x1, y1, tris]
   const hash = (i: number) => { let h = Math.imul(i ^ 0x9e3779b9, 0x85ebca6b); h ^= h >>> 13; return ((Math.imul(h, 0xc2b2ae35) >>> 0) % 1000) / 1000; };
   const tilesOf = (b: number[], out: Set<string>) => {
-    for (let ty = Math.floor(b[4] / T); ty <= Math.min(d1.ny - 1, Math.floor((b[6] - 1) / T)); ty++)
-      for (let tx = Math.floor(b[3] / T); tx <= Math.min(d1.nx - 1, Math.floor((b[5] - 1) / T)); tx++) out.add(S.key(1, tx, ty));
+    for (let ty = Math.max(0, Math.floor(b[4] / T)); ty <= Math.min(d1.ny - 1, Math.floor((b[6] - 1) / T)); ty++)
+      for (let tx = Math.max(0, Math.floor(b[3] / T)); tx <= Math.min(d1.nx - 1, Math.floor((b[5] - 1) / T)); tx++) out.add(S.key(1, tx, ty));
     return out;
   };
   const ready = (k: string) => S.nodes.get(k)?.state === 'ready';

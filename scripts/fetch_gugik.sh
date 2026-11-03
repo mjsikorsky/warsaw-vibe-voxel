@@ -5,7 +5,22 @@
 set -e
 cd "$(dirname "$0")/../data/raw"
 O=https://opendata.geoportal.gov.pl
-get() { [ -s "$2" ] || { for i in 1 2 3 4 5; do curl -sS -m 3600 -C - -o "$2.part" "$1" && mv "$2.part" "$2" && break; sleep 15; done; }; ls -la "$2"; }
+# an error page (HTML/XML) where a raster or zip should be: the server answered, but not with the file
+bad() { [ "$(head -c 1 "$1")" = "<" ]; }
+# -f: HTTP errors fail instead of saving the error page; after one, the .part is dropped so the next try does not
+# resume onto it. A cached file that is an error page (from before -f) is fetched again. Gives up the whole build after 5 tries.
+get() {
+  if [ -s "$2" ] && bad "$2"; then echo "re-fetching $2 (cached error page)"; rm -f "$2"; fi
+  if [ ! -s "$2" ]; then
+    for i in 1 2 3 4 5; do
+      curl -fsS -m 3600 --retry 3 -C - -o "$2.part" "$1" && { mv "$2.part" "$2"; break; }
+      [ $? -eq 22 ] && rm -f "$2.part"
+      sleep 15
+    done
+    if [ ! -s "$2" ] || bad "$2"; then echo "failed to download $1" >&2; rm -f "$2"; exit 1; fi
+  fi
+  ls -la "$2"
+}
 #     sheet              DSM id  DTM id  ortho id
 SHEETS="N-34-138-B-d-2-2 1744473 1744657 1485374
 N-34-138-B-d-2-4 1744475 1744659 1485376

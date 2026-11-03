@@ -17,15 +17,24 @@ if [ -z "$OVERPASS" ]; then
   P=data/raw/geofabrik/mazowieckie-latest.osm.pbf
   mkdir -p data/raw/geofabrik
   if [ ! -s $P ] || [ -n "$(find $P -mtime +1)" ]; then
-    curl -sS -L -o $P.part https://download.geofabrik.de/europe/poland/mazowieckie-latest.osm.pbf && mv $P.part $P
+    # a failed refresh stops the build instead of going on with the old extract (rm the .pbf to force a fresh one)
+    curl -fsSL --retry 3 -m 1800 -o $P.part https://download.geofabrik.de/europe/poland/mazowieckie-latest.osm.pbf || {
+      echo "Geofabrik download failed" >&2; rm -f $P.part; exit 1; }
+    mv $P.part $P
   fi
   uv run --with osmium python scripts/osm_pbf.py $P $BB data/raw/osm.json
   exit 0
 fi
 Q="[out:json][timeout:600][maxsize:536870912];nwr($BB);out body geom($BB);"
 for round in 1 2 3 4 5 6; do for u in https://overpass-api.de/api/interpreter https://overpass.private.coffee/api/interpreter https://overpass.kumi.systems/api/interpreter; do
-  curl -s -m 900 -A "warsaw-voxel/0.1" --data-urlencode "data=$Q" "$u" -o data/raw/osm.json.part
-  if head -c 20 data/raw/osm.json.part | grep -q '{'; then mv data/raw/osm.json.part data/raw/osm.json; echo "OK $u"; exit 0; fi
+  curl -fs -m 900 -A "warsaw-voxel/0.1" --data-urlencode "data=$Q" "$u" -o data/raw/osm.json.part || true
+  # Overpass answers a timeout or maxsize hit with HTTP 200 and a "remark", next to whatever it got so far: not complete
+  if uv run python -c "
+import json, sys
+d = json.load(open('data/raw/osm.json.part'))
+sys.exit(0 if 'remark' not in d and len(d.get('elements', [])) > 1000 else 1)" 2>/dev/null; then
+    mv data/raw/osm.json.part data/raw/osm.json; echo "OK $u"; exit 0
+  fi
   echo "fail $u (round $round)"; sleep $((round * 10))
 done; done
 exit 1

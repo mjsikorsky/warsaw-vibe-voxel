@@ -33,7 +33,9 @@ def load(osm_trees):
     """osm_trees: [(oid, tags, Point(col, row))] from voxelize's OSM reader. Returns a list of dicts with grid x, y."""
     out = []
     bos_f = Path(RAW) / "trees" / "bos_trees.json"
-    if bos_f.exists():
+    if not bos_f.exists():
+        print(f"WARNING: {bos_f} missing (scripts/fetch_trees.py): no city tree database, OSM trees only", file=sys.stderr)
+    else:
         for t in json.load(open(bos_f)):
             if t["x2180"] is None:
                 continue
@@ -61,7 +63,9 @@ def load(osm_trees):
         n_osm += 1
     um_f = Path(RAW) / "trees" / "um_drzewa.json"
     n_um = 0
-    if um_f.exists():
+    if not um_f.exists():
+        print(f"WARNING: {um_f} missing: no heights or crown diameters from the 2010-13 inventory", file=sys.stderr)
+    else:
         d = json.load(open(um_f))
         xs = np.array([float(r["x_wgs84"] or 0) for r in d])
         ys = np.array([float(r["y_wgs84"] or 0) for r in d])
@@ -105,6 +109,7 @@ def attach_crowns(trees):
     from aoi import to_world
     f = Path(RAW) / "trees" / "bos_crowns.json"
     if not f.exists():
+        print(f"WARNING: {f} missing (scripts/fetch_trees.py): no crown polygons", file=sys.stderr)
         return 0
     polys, meta = [], []
     for c in json.load(open(f)):
